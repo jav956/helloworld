@@ -1,52 +1,66 @@
 pipeline {
     agent any
-
      stages {
-        stage('Get Code') {
+        stage('GetCode') {
             steps {
-                // Obtener código del repo
-                git 'https://github.com/anieto-unir/helloworld.git'
+                // Crear y ejecutar un pipeline simple, una sola etapa con un “echo”
+                echo "Hello World"
+                
+                // Añadir un comando git para traer todo el código fuente del repositorio
+                git 'https://github.com/jav956/helloworld.git'
+                
+                // Verificar que el código se ha descargado mediante comando dir
+                bat 'dir'
+                
+                // Verificar cuál es el espacio de trabajo
+                echo "${env.WORKSPACE}"
             }
         }
-    
         stage('Build') {
-           steps {
-              echo 'Eyyy, esto es Python. No hay que compilar nada!!!'
-	          echo WORKSPACE
-              bat 'dir'
-           }
-        }
-        
-        stage('Unit') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    bat '''
-                        set PYTHONPATH=%WORKSPACE%
-                        pytest --junitxml=result-unit.xml test\\unit
-                    '''
-               }
-            }
-        }   
-
-
-        stage('Rest') {
-            steps {
-                bat '''
-                    set FLASK_APP=app\\api.py
-                    set FLASK_ENV=development
-                    start flask run
-                    start java -jar C:\\Unir\\Ejercicios\\wiremock\\wiremock-jre8-standalone-2.28.0.jar --port 9090 --root-dir C:\\Unir\\Ejercicios\\wiremock
-                    set PYTHONPATH=%WORKSPACE%
-                    pytest --junitxml=result-rest.xml test\\rest
-                '''
-            }    
-        }
-
-        stage('Results') {
-            steps {
-                junit 'result*.xml' 
+                // Añadir etapa “Build” (que no hace nada realmente)
+                echo "Nada que compilar"
             }
         }
-     
+        stage('Test') {
+            // Convertir ambas etapas para se ejecuten en paralelo
+            parallel {
+                // Añadir etapa Unit lanzando solo las pruebas unitarias
+                stage('Unit') {
+                    steps {
+                        bat '''
+                            call C:\\Users\\jvareldi\\Desktop\\unir\\venv\\Scripts\\activate.bat
+                            @echo on
+                            set PYTHONPATH=%WORKSPACE%
+                            pytest --junitxml=result-unit.xml test\\unit
+                        '''
+                    }
+                }
+                // Añadir etapa Service (secuencial) lanzado las pruebas de servicio
+                stage('Service') {
+                    steps {
+                        bat '''
+                            call C:\\Users\\jvareldi\\Desktop\\unir\\venv\\Scripts\\activate.bat
+                            @echo on
+                            
+                            REM Iniciar los servidores flask y wiremock antes de llamar a pytest test rest
+                            set FLASK_APP=app\\api.py
+                            set FLASK_ENV=development
+                            start flask run
+                            start java -jar C:\\Users\\jvareldi\\Desktop\\unir\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir C:\\Users\\jvareldi\\Desktop\\unir\\helloworld-master\\test\\wiremock
+                            set PYTHONPATH=%WORKSPACE%
+                            
+                            pytest --junitxml=result-service.xml test\\rest
+                        '''            
+                    }
+                }
+            }
+        }
+        // Añadir una etapa posterior para conectar con JUnit
+        stage('JUnit') {
+            steps {
+                junit 'result-*.xml' 
+            }
+        }
     }
 }
