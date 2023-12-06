@@ -1,0 +1,120 @@
+pipeline {
+    agent none
+    stages {
+        stage('GetCode') {
+            agent { label "windows" }
+            steps {
+                bat '''
+                    whoami
+                    hostname
+                '''
+
+                // Crear y ejecutar un pipeline simple, una sola etapa con un “echo”
+                echo "Hello World"
+
+                // Añadir un comando git para traer todo el código fuente del repositorio
+                git 'https://github.com/jav956/helloworld.git'
+
+                // Verificar que el código se ha descargado mediante comando dir
+                bat 'dir'
+
+                // Verificar cuál es el espacio de trabajo
+                echo "${env.WORKSPACE}"
+
+                // Limpieza del workspace
+                deleteDir()
+            }
+        }
+        stage('Build') {
+            agent { label "linux" }
+            steps {
+                sh '''
+                    whoami
+                    hostname
+                '''
+                // Añadir etapa “Build” (que no hace nada realmente)
+                echo "Nada que compilar"
+
+                // Limpieza del workspace
+                deleteDir()
+            }
+        }
+        stage('Test') {
+            // Convertir ambas etapas para se ejecuten en paralelo
+            parallel {
+                // Añadir etapa Unit lanzando solo las pruebas unitarias
+                stage('Unit') {
+                    agent { label "windows" }
+                    steps {
+                        bat '''
+                            whoami
+                            hostname
+                        '''
+                        bat '''
+                            call C:\\jenkins\\venv\\Scripts\\activate.bat
+                            @echo on
+                            set PYTHONPATH=%WORKSPACE%
+                            pytest --junitxml=result-unit.xml test\\unit
+                        '''                        
+                        // Almacenamiento en stash
+                        stash includes: 'result-unit.xml', name: 'unit'
+
+                        // Limpieza del workspace
+                        deleteDir()
+                    }
+                }
+                // Añadir etapa Service (secuencial) lanzado las pruebas de servicio
+                stage('Service') {
+                    agent { label "windows" }
+                    steps {
+                        bat '''
+                            whoami
+                            hostname
+                        '''
+                        bat '''
+                            call C:\\jenkins\\venv\\Scripts\\activate.bat
+                            @echo on
+                            
+                            REM Iniciar los servidores flask y wiremock antes de llamar a pytest test rest
+                            set FLASK_APP=app\\api.py
+                            set FLASK_ENV=development
+                            start flask run
+                            start java -jar C:\\jenkins\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir test\\wiremock
+
+                            set PYTHONPATH=%WORKSPACE%
+                            pytest --junitxml=result-service.xml test\\rest
+
+                            REM Se paran procesos para que no bloqueen ficheros y falle el deleteDir
+                            for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 127.0.0.1:5000.*LISTENING"') do taskKill /f /pid %%p
+                            for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 0.0.0.0:9090.*LISTENING"') do taskKill /f /pid %%p
+                        '''            
+                        // Almacenamiento en stash
+                        stash includes: 'result-service.xml', name: 'service'
+
+                        // Limpieza del workspace
+                        deleteDir()
+                    }
+                }
+            }
+        }
+        // Añadir una etapa posterior para conectar con JUnit
+        stage('JUnit') {
+            agent { label "windows" }
+            steps {
+                bat '''
+                    whoami
+                    hostname
+                '''
+                
+                // Recuperación de ficheros del stash
+                unstash name: 'unit'
+                unstash name: 'service'
+
+                junit 'result-*.xml'
+
+                // Limpieza del workspace
+                deleteDir()
+            }
+        }
+    }
+}
