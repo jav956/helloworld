@@ -1,21 +1,6 @@
 pipeline {
     agent any
      stages {
-        stage('GetCode') {
-            steps {
-                // Crear y ejecutar un pipeline simple, una sola etapa con un “echo”
-                echo "Hello World"
-                
-                // Añadir un comando git para traer todo el código fuente del repositorio
-                git 'https://github.com/jav956/helloworld.git'
-                
-                // Verificar que el código se ha descargado mediante comando dir
-                bat 'dir'
-                
-                // Verificar cuál es el espacio de trabajo
-                echo "${env.WORKSPACE}"
-            }
-        }
         stage('Build') {
             steps {
                 // Añadir etapa “Build” (que no hace nada realmente)
@@ -48,8 +33,11 @@ pipeline {
                             set FLASK_ENV=development
                             start flask run
                             start java -jar C:\\Users\\jvareldi\\Desktop\\unir\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir C:\\Users\\jvareldi\\Desktop\\unir\\helloworld-master\\test\\wiremock
+
+                            python wait_services.py
+                            if %errorlevel% == 1 exit 1
+
                             set PYTHONPATH=%WORKSPACE%
-                            
                             pytest --junitxml=result-service.xml test\\rest
                         '''            
                     }
