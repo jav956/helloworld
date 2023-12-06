@@ -1,30 +1,6 @@
 pipeline {
     agent none
     stages {
-        stage('GetCode') {
-            agent { label "windows" }
-            steps {
-                bat '''
-                    whoami
-                    hostname
-                '''
-
-                // Crear y ejecutar un pipeline simple, una sola etapa con un “echo”
-                echo "Hello World"
-
-                // Añadir un comando git para traer todo el código fuente del repositorio
-                git 'https://github.com/jav956/helloworld.git'
-
-                // Verificar que el código se ha descargado mediante comando dir
-                bat 'dir'
-
-                // Verificar cuál es el espacio de trabajo
-                echo "${env.WORKSPACE}"
-
-                // Limpieza del workspace
-                deleteDir()
-            }
-        }
         stage('Build') {
             agent { label "linux" }
             steps {
