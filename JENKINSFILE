@@ -1,66 +1,93 @@
 pipeline {
-    agent any
-     stages {
-        stage('GetCode') {
-            steps {
-                // Crear y ejecutar un pipeline simple, una sola etapa con un “echo”
-                echo "Hello World"
-                
-                // Añadir un comando git para traer todo el código fuente del repositorio
-                git 'https://github.com/jav956/helloworld.git'
-                
-                // Verificar que el código se ha descargado mediante comando dir
-                bat 'dir'
-                
-                // Verificar cuál es el espacio de trabajo
-                echo "${env.WORKSPACE}"
-            }
+  agent any
+  stages {
+    stage('Unit & Coverage') {
+      steps {
+        bat '''
+          REM Cambiar al venv
+          call C:\\unir\\venv\\Scripts\\activate.bat
+          @echo on
+          
+          set PYTHONPATH=%WORKSPACE%
+          coverage run --branch --source=app --omit=app\\__init__.py,app\\api.py -m pytest --junitxml=result-unit.xml test\\unit
+          coverage xml 
+        '''
+        junit 'result-unit.xml'
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+          cobertura coberturaReportFile: 'coverage.xml', onlyStable: false, lineCoverageTargets: '95, 85, 95', conditionalCoverageTargets: '90, 80, 90', failUnhealthy: true, failUnstable: false
         }
-        stage('Build') {
-            steps {
-                // Añadir etapa “Build” (que no hace nada realmente)
-                echo "Nada que compilar"
-            }
-        }
-        stage('Test') {
-            // Convertir ambas etapas para se ejecuten en paralelo
-            parallel {
-                // Añadir etapa Unit lanzando solo las pruebas unitarias
-                stage('Unit') {
-                    steps {
-                        bat '''
-                            call C:\\Users\\jvareldi\\Desktop\\unir\\venv\\Scripts\\activate.bat
-                            @echo on
-                            set PYTHONPATH=%WORKSPACE%
-                            pytest --junitxml=result-unit.xml test\\unit
-                        '''
-                    }
-                }
-                // Añadir etapa Service (secuencial) lanzado las pruebas de servicio
-                stage('Service') {
-                    steps {
-                        bat '''
-                            call C:\\Users\\jvareldi\\Desktop\\unir\\venv\\Scripts\\activate.bat
-                            @echo on
-                            
-                            REM Iniciar los servidores flask y wiremock antes de llamar a pytest test rest
-                            set FLASK_APP=app\\api.py
-                            set FLASK_ENV=development
-                            start flask run
-                            start java -jar C:\\Users\\jvareldi\\Desktop\\unir\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir C:\\Users\\jvareldi\\Desktop\\unir\\helloworld-master\\test\\wiremock
-                            set PYTHONPATH=%WORKSPACE%
-                            
-                            pytest --junitxml=result-service.xml test\\rest
-                        '''            
-                    }
-                }
-            }
-        }
-        // Añadir una etapa posterior para conectar con JUnit
-        stage('JUnit') {
-            steps {
-                junit 'result-*.xml' 
-            }
-        }
+      }
     }
+    stage('Rest') {
+      steps {
+        bat '''
+          REM Cambiar al venv
+          call C:\\unir\\venv\\Scripts\\activate.bat
+          @echo on
+          
+          REM Iniciar los servidores flask y wiremock
+          set FLASK_APP=app\\api.py
+          set FLASK_ENV=development
+          start flask run
+          start java -jar C:\\unir\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir test\\wiremock
+          python wait_services.py 5000 9090
+          if %errorlevel% == 1 exit 1
+
+          set PYTHONPATH=%WORKSPACE%
+          pytest --junitxml=result-service.xml test\\rest
+
+          REM Se paran los procesos flask y wiremock
+          for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 127.0.0.1:5000.*LISTENING"') do taskKill /f /pid %%p
+          for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 0.0.0.0:9090.*LISTENING"') do taskKill /f /pid %%p
+        '''
+        junit 'result-service.xml'
+      }
+    }
+    stage('Static') {
+      steps {
+        bat '''
+          REM Cambiar al venv
+          call C:\\unir\\venv\\Scripts\\activate.bat
+          @echo on
+          
+          flake8 --format=pylint --exit-zero app > flake8.out
+        '''
+        recordIssues qualityGates: [[threshold: 8, type: 'TOTAL', unstable: true],[threshold: 10, type: 'TOTAL', unstable: false]], tools: [flake8(name: 'Flake8', pattern: 'flake8.out')]
+      }
+    }
+    stage('Security') {
+      steps {
+        bat '''
+          REM Cambiar al venv
+          call C:\\unir\\venv\\Scripts\\activate.bat
+          @echo on
+            
+          bandit -r -o bandit.out -f custom --msg-template "{abspath}:{line}: [{test_id}] {msg}" --exit-zero app
+        '''
+        recordIssues qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true],[threshold: 4, type: 'TOTAL', unstable: false]], tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')]
+      }
+    }
+    stage('Performance') {
+      steps {
+        bat '''
+          REM Cambiar al venv
+          call C:\\unir\\venv\\Scripts\\activate.bat
+          @echo on
+          
+          REM Iniciar los servidores flask
+          set FLASK_APP=app\\api.py
+          set FLASK_ENV=development
+          start flask run
+          python wait_services.py 5000
+          if %errorlevel% == 1 exit 1
+
+          C:\\unir\\jmeter\\bin\\jmeter -n -t test\\testplan.jmx  -f -l perf.jtl
+
+          REM Se para el proceso flask
+          for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 127.0.0.1:5000.*LISTENING"') do taskKill /f /pid %%p
+        '''
+        perfReport sourceDataFiles: 'perf.jtl'
+      }
+    }
+  }
 }
