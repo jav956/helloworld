@@ -1,120 +1,132 @@
 pipeline {
-    agent none
-    stages {
-        stage('GetCode') {
-            agent { label "windows" }
-            steps {
-                bat '''
-                    whoami
-                    hostname
-                '''
+  agent none
+  stages {
+    stage('Parallel') {
+      parallel {
+        stage('Unit & Coverage') {
+          agent any
+          steps {
+            bat '''
+              whoami
+              hostname
+              echo %WORKSPACE%
 
-                // Crear y ejecutar un pipeline simple, una sola etapa con un “echo”
-                echo "Hello World"
-
-                // Añadir un comando git para traer todo el código fuente del repositorio
-                git 'https://github.com/jav956/helloworld.git'
-
-                // Verificar que el código se ha descargado mediante comando dir
-                bat 'dir'
-
-                // Verificar cuál es el espacio de trabajo
-                echo "${env.WORKSPACE}"
-
-                // Limpieza del workspace
-                deleteDir()
+              REM Cambiar al venv
+              call C:\\unir\\venv\\Scripts\\activate.bat
+              @echo on
+              
+              set PYTHONPATH=%WORKSPACE%
+              coverage run --branch --source=app --omit=app\\__init__.py,app\\api.py -m pytest --junitxml=result-unit.xml test\\unit
+              coverage xml 
+            '''
+            junit 'result-unit.xml'
+            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+              cobertura coberturaReportFile: 'coverage.xml', onlyStable: false, lineCoverageTargets: '95, 85, 95', conditionalCoverageTargets: '90, 80, 90', failUnhealthy: true, failUnstable: false
             }
+           
+            deleteDir()
+          }
         }
-        stage('Build') {
-            agent { label "linux" }
-            steps {
-                sh '''
-                    whoami
-                    hostname
-                '''
-                // Añadir etapa “Build” (que no hace nada realmente)
-                echo "Nada que compilar"
+        stage('Rest') {
+          agent any
+          steps {
+            bat '''
+              whoami
+              hostname
+              echo %WORKSPACE%
 
-                // Limpieza del workspace
-                deleteDir()
-            }
+              REM Cambiar al venv
+              call C:\\unir\\venv\\Scripts\\activate.bat
+              @echo on
+              
+              REM Iniciar los servidores flask y wiremock
+              set FLASK_APP=app\\api.py
+              set FLASK_ENV=development
+              start flask run
+              start java -jar C:\\unir\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir test\\wiremock
+              python wait_services.py 5000 9090
+              if %errorlevel% == 1 exit 1
+
+              set PYTHONPATH=%WORKSPACE%
+              pytest --junitxml=result-service.xml test\\rest
+
+              REM Se paran los procesos flask y wiremock
+              for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 127.0.0.1:5000.*LISTENING"') do taskKill /f /pid %%p
+              for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 0.0.0.0:9090.*LISTENING"') do taskKill /f /pid %%p
+            '''
+            junit 'result-service.xml'
+
+            deleteDir()
+          }
         }
-        stage('Test') {
-            // Convertir ambas etapas para se ejecuten en paralelo
-            parallel {
-                // Añadir etapa Unit lanzando solo las pruebas unitarias
-                stage('Unit') {
-                    agent { label "windows" }
-                    steps {
-                        bat '''
-                            whoami
-                            hostname
-                        '''
-                        bat '''
-                            call C:\\jenkins\\venv\\Scripts\\activate.bat
-                            @echo on
-                            set PYTHONPATH=%WORKSPACE%
-                            pytest --junitxml=result-unit.xml test\\unit
-                        '''                        
-                        // Almacenamiento en stash
-                        stash includes: 'result-unit.xml', name: 'unit'
+        stage('Static') {
+          agent any
+          steps {
+            bat '''
+              whoami
+              hostname
+              echo %WORKSPACE%
 
-                        // Limpieza del workspace
-                        deleteDir()
-                    }
-                }
-                // Añadir etapa Service (secuencial) lanzado las pruebas de servicio
-                stage('Service') {
-                    agent { label "windows" }
-                    steps {
-                        bat '''
-                            whoami
-                            hostname
-                        '''
-                        bat '''
-                            call C:\\jenkins\\venv\\Scripts\\activate.bat
-                            @echo on
-                            
-                            REM Iniciar los servidores flask y wiremock antes de llamar a pytest test rest
-                            set FLASK_APP=app\\api.py
-                            set FLASK_ENV=development
-                            start flask run
-                            start java -jar C:\\jenkins\\wiremock-standalone-3.3.1.jar --port 9090 --root-dir test\\wiremock
+              REM Cambiar al venv
+              call C:\\unir\\venv\\Scripts\\activate.bat
+              @echo on
+              
+              flake8 --format=pylint --exit-zero app > flake8.out
+            '''
+            recordIssues qualityGates: [[threshold: 8, type: 'TOTAL', unstable: true],[threshold: 10, type: 'TOTAL', unstable: false]], tools: [flake8(name: 'Flake8', pattern: 'flake8.out')]
 
-                            set PYTHONPATH=%WORKSPACE%
-                            pytest --junitxml=result-service.xml test\\rest
-
-                            REM Se paran procesos para que no bloqueen ficheros y falle el deleteDir
-                            for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 127.0.0.1:5000.*LISTENING"') do taskKill /f /pid %%p
-                            for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 0.0.0.0:9090.*LISTENING"') do taskKill /f /pid %%p
-                        '''            
-                        // Almacenamiento en stash
-                        stash includes: 'result-service.xml', name: 'service'
-
-                        // Limpieza del workspace
-                        deleteDir()
-                    }
-                }
-            }
+            deleteDir()
+          }
         }
-        // Añadir una etapa posterior para conectar con JUnit
-        stage('JUnit') {
-            agent { label "windows" }
-            steps {
-                bat '''
-                    whoami
-                    hostname
-                '''
+        stage('Security') {
+          agent any
+          steps {
+            bat '''
+              whoami
+              hostname
+              echo %WORKSPACE%
+
+              REM Cambiar al venv
+              call C:\\unir\\venv\\Scripts\\activate.bat
+              @echo on
                 
-                // Recuperación de ficheros del stash
-                unstash name: 'unit'
-                unstash name: 'service'
+              bandit -r -o bandit.out -f custom --msg-template "{abspath}:{line}: [{test_id}] {msg}" --exit-zero app
+            '''
+            recordIssues qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true],[threshold: 4, type: 'TOTAL', unstable: false]], tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')]
 
-                junit 'result-*.xml'
-
-                // Limpieza del workspace
-                deleteDir()
-            }
+            deleteDir()
+          }
         }
+      }
     }
+    stage('Performance') {
+      agent any
+      steps {
+        bat '''
+          whoami
+          hostname
+          echo %WORKSPACE%
+
+          REM Cambiar al venv
+          call C:\\unir\\venv\\Scripts\\activate.bat
+          @echo on
+          
+          REM Iniciar los servidores flask
+          set FLASK_APP=app\\api.py
+          set FLASK_ENV=development
+          start flask run
+          python wait_services.py 5000
+          if %errorlevel% == 1 exit 1
+
+          call C:\\unir\\jmeter\\bin\\jmeter -n -t test\\testplan.jmx  -f -l perf.jtl
+
+          REM Se para el proceso flask
+          for /f "tokens=5 delims= " %%p IN ('"netstat -ano | findstr 127.0.0.1:5000.*LISTENING"') do taskKill /f /pid %%p
+        '''
+        perfReport sourceDataFiles: 'perf.jtl'
+
+        deleteDir()
+      }
+    }
+  }
 }
